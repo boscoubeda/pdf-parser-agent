@@ -51,6 +51,7 @@ def parse_pdf_url():
 
     data = request.get_json()
     if not data or 'url' not in data:
+        print(">> Invalid body:", data)
         return jsonify({"error": "Missing 'url' in JSON body"}), 400
 
     pdf_url = data['url']
