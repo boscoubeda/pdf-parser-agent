@@ -1,77 +1,76 @@
 from flask import Flask, request, jsonify
+from werkzeug.utils import secure_filename
 import fitz  # PyMuPDF
 import base64
-from io import BytesIO
-from PIL import Image
+import os
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB
 
-def extract_pdf_data(file_stream):
-    doc = fitz.open(stream=file_stream.read(), filetype="pdf")
-    results = []
+@app.route('/parse', methods=['POST'])
+def parse_pdf():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file received (request.files is empty)'}), 400
 
-    for page_num, page in enumerate(doc):
-        # Extraer líneas de texto con su posición
-        lines_info = []
-        try:
-            blocks = page.get_text("dict")["blocks"]
-            for block in blocks:
-                if block["type"] == 0:  # text block
-                    for line in block["lines"]:
-                        y_pos = line["bbox"][1]
-                        text_line = " ".join([span["text"] for span in line["spans"]]).strip()
-                        if text_line:
-                            lines_info.append({"y": y_pos, "text": text_line})
-        except Exception as e:
-            print(f"Error extracting text on page {page_num + 1}: {str(e)}")
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'Empty filename'}), 400
 
-        # Extraer imágenes
-        images = []
-        try:
+    filename = secure_filename(file.filename)
+    filepath = os.path.join('/tmp', filename)
+    file.save(filepath)
+
+    try:
+        doc = fitz.open(filepath)
+        pages_data = []
+
+        for page_num, page in enumerate(doc, start=1):
+            text_instances = page.get_text("dict")
+            lines = []
+            for block in text_instances.get("blocks", []):
+                for line in block.get("lines", []):
+                    line_text = " ".join([span["text"] for span in line.get("spans", [])])
+                    lines.append({
+                        "text": line_text,
+                        "y": line["bbox"][1]
+                    })
+
+            images = []
             for img_index, img in enumerate(page.get_images(full=True)):
                 xref = img[0]
-                y_image = img[7] if len(img) > 7 else 0
                 base_image = doc.extract_image(xref)
-                image_bytes = base_image["image"]
-                image = Image.open(BytesIO(image_bytes))
+                img_bytes = base_image["image"]
+                img_ext = base_image["ext"]
+                img_b64 = base64.b64encode(img_bytes).decode('utf-8')
 
-                buffered = BytesIO()
-                image.save(buffered, format="PNG")
-                img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                # Obtener bbox aproximado (posición en página)
+                img_rects = page.get_image_bbox(xref)
+                img_y = img_rects.y0 if img_rects else 0
 
-                # Buscar texto más cercano por coordenada Y
-                closest_text = ""
-                if lines_info:
-                    closest_text = min(lines_info, key=lambda l: abs(l["y"] - y_image))["text"]
+                # Buscar texto más cercano en Y
+                closest_text = min(lines, key=lambda l: abs(l['y'] - img_y))['text'] if lines else ""
 
                 images.append({
                     "index": img_index + 1,
-                    "y": y_image,
-                    "text_snippet": closest_text,
-                    "image_base64": img_str
+                    "page": page_num,
+                    "y": img_y,
+                    "text_near": closest_text,
+                    "image_base64": img_b64,
+                    "ext": img_ext
                 })
-        except Exception as e:
-            print(f"Error extracting image on page {page_num + 1}: {str(e)}")
 
-        results.append({
-            "page": page_num + 1,
-            "text_lines": lines_info,
-            "images": images
-        })
+            pages_data.append({
+                "page": page_num,
+                "text_lines": lines,
+                "images": images
+            })
 
-    return results
+        return jsonify(pages_data), 200
 
-@app.route("/parse", methods=["POST"])
-def parse_pdf():
-    if not request.files or 'file' not in request.files:
-        return jsonify({"error": "No file received (request.files is empty)"}), 400
-
-    try:
-        file = request.files['file']
-        parsed_data = extract_pdf_data(file)
-        return jsonify(parsed_data)
     except Exception as e:
-        return jsonify({"error": "Processing error", "details": str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
-app.run(host="0.0.0.0", port=8080, debug=False)
+    finally:
+        os.remove(filepath)
+
+if __name__ == '__main__':
+    app.run(debug=False, host='0.0.0.0', port=10000)
