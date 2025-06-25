@@ -54,4 +54,7 @@ def parse_pdf():
     parsed_data = extract_pdf_data(file)
     return jsonify(parsed_data)
 
-app.run(host="0.0.0.0", port=8080, debug=False)
+import os
+
+port = int(os.environ.get("PORT", 8080))
+app.run(host="0.0.0.0", port=port)
