@@ -12,37 +12,46 @@ def extract_pdf_data(file_stream):
     results = []
 
     for page_num, page in enumerate(doc):
-        text = page.get_text("text")
+        blocks = page.get_text("dict")["blocks"]
+        lines_info = []
+        for block in blocks:
+            if block["type"] == 0:  # text block
+                for line in block["lines"]:
+                    text_line = " ".join([span["text"] for span in line["spans"]]).strip()
+                    if text_line:
+                        y_pos = line["bbox"][1]
+                        lines_info.append({
+                            "text": text_line,
+                            "y": y_pos
+                        })
+
         images = []
-
         for img_index, img in enumerate(page.get_images(full=True)):
-            try:
-                xref = img[0]
-                base_image = doc.extract_image(xref)
-                image_bytes = base_image["image"]
-                image = Image.open(BytesIO(image_bytes))
+            xref = img[0]
+            base_image = doc.extract_image(xref)
+            image_bytes = base_image["image"]
+            y_image = img[7]  # y-position of the image
+            image = Image.open(BytesIO(image_bytes))
 
-                # ⛔ Filtrar imágenes "raras": pequeñas o transparentes
-                if image.width < 50 or image.height < 50:
-                    print(f"Skipped tiny image {img_index + 1} on page {page_num + 1}")
-                    continue
+            buffered = BytesIO()
+            image.save(buffered, format="PNG")
+            img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-                buffered = BytesIO()
-                image.save(buffered, format="PNG")
-                img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+            # Find closest text line by vertical position
+            closest_text = ""
+            if lines_info:
+                closest_text = min(lines_info, key=lambda l: abs(l["y"] - y_image))["text"]
 
-                images.append({
-                    "page": page_num + 1,
-                    "index": img_index + 1,
-                    "image_base64": img_str
-                })
-            except Exception as e:
-                print(f"Skipped image {img_index + 1} on page {page_num + 1}: {e}")
-                continue
+            images.append({
+                "index": img_index + 1,
+                "y": y_image,
+                "text_snippet": closest_text,
+                "image_base64": img_str
+            })
 
         results.append({
             "page": page_num + 1,
-            "text": text.strip(),
+            "text_lines": lines_info,
             "images": images
         })
 
@@ -57,5 +66,4 @@ def parse_pdf():
     parsed_data = extract_pdf_data(file)
     return jsonify(parsed_data)
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+app.run(host="0.0.0.0", port=8080, debug=False)
