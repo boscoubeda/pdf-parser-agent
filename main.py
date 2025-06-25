@@ -51,18 +51,14 @@ def parse_pdf():
 
     print(">> request.files keys:", list(request.files.keys()))
 
-    # Obtener el primer archivo recibido, sin importar el nombre
     file_key = next(iter(request.files))
     file = request.files[file_key]
-    
     parsed_data = extract_pdf_data(file)
     return jsonify(parsed_data)
 
-# Ruta opcional para que Render no muestre 404 en / (para keep-alive)
 @app.route("/", methods=["GET"])
 def home():
     return "OK", 200
 
-# Ejecutar app con el puerto dinámico de Render
 port = int(os.environ.get("PORT", 8080))
 app.run(host="0.0.0.0", port=port, debug=False)
