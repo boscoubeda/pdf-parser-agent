@@ -41,6 +41,10 @@ def extract_pdf_data_from_bytes(file_bytes):
 
     return results
 
+@app.route("/", methods=["GET"])
+def home():
+    return "PDF Parser Agent is running", 200
+
 @app.route("/parse", methods=["POST"])
 def parse_pdf_url():
     print(">> Request received")
@@ -63,9 +67,6 @@ def parse_pdf_url():
     parsed_data = extract_pdf_data_from_bytes(pdf_bytes)
     return jsonify(parsed_data)
 
-@app.route("/", methods=["GET"])
-def home():
-    return "PDF Parser Agent is running", 200
-
-port = int(os.environ.get("PORT", 8080))
-app.run(host="0.0.0.0", port=port, debug=False)
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port, debug=False)
