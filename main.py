@@ -1,9 +1,8 @@
 from flask import Flask, request, jsonify
 import fitz  # PyMuPDF
-import base64
-from io import BytesIO
 from PIL import Image
-import os
+from io import BytesIO
+import base64
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB
@@ -40,21 +39,18 @@ def extract_pdf_data(file_stream):
 
     return results
 
-@app.route("/", methods=["GET"])
-def home():
-    return "PDF Parser Agent is running", 200
-
-@app.route("/upload", methods=["POST"])
-def upload_pdf():
-    print(">> Request received (binary)")
+@app.route("/parse", methods=["POST"])
+def parse_pdf():
     if 'file' not in request.files:
-        print(">> No file found in request")
-        return jsonify({"error": "No file uploaded"}), 400
+        return jsonify({"error": "No file received (request.files is empty)"}), 400
 
     file = request.files['file']
+
+    if file.filename == "":
+        return jsonify({"error": "No selected file"}), 400
+
     parsed_data = extract_pdf_data(file)
     return jsonify(parsed_data)
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=8080)
