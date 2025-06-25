@@ -3,7 +3,6 @@ import fitz  # PyMuPDF
 import base64
 from io import BytesIO
 from PIL import Image
-import os
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB
@@ -40,6 +39,10 @@ def extract_pdf_data(file_stream):
 
     return results
 
+@app.route("/")
+def root():
+    return "PDF Parser Agent is running"
+
 @app.route("/parse", methods=["POST"])
 def parse_pdf():
     print(">> Request received")
@@ -51,14 +54,10 @@ def parse_pdf():
 
     print(">> request.files keys:", list(request.files.keys()))
 
-    file_key = next(iter(request.files))
+    file_key = next(iter(request.files))  # get the first file key
     file = request.files[file_key]
     parsed_data = extract_pdf_data(file)
     return jsonify(parsed_data)
 
-@app.route("/", methods=["GET"])
-def home():
-    return "OK", 200
-
-port = int(os.environ.get("PORT", 8080))
-app.run(host="0.0.0.0", port=port, debug=False)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080)
