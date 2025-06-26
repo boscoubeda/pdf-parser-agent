@@ -3,3 +3,5 @@ flask-cors
 pymupdf
 pillow
 requests
+opencv-python-headless
+numpy
