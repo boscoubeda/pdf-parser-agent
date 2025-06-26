@@ -1,82 +1,87 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import fitz  # PyMuPDF
+import numpy as np
+from PIL import Image
 import io
 import base64
+import cv2
 
 app = Flask(__name__)
 CORS(app)
 
+def extract_images_with_context(pdf_bytes):
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    all_results = []
+
+    for page_index in range(len(doc)):
+        page = doc[page_index]
+        pix = page.get_pixmap(dpi=150)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        img_np = np.array(img)
+
+        gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+        _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        image_results = []
+        for i, contour in enumerate(contours):
+            x, y, w, h = cv2.boundingRect(contour)
+            if w < 30 or h < 30:
+                continue  # descarta elementos muy pequeños
+
+            cropped = img_np[y:y+h, x:x+w]
+            cropped_pil = Image.fromarray(cropped)
+            buffer = io.BytesIO()
+            cropped_pil.save(buffer, format="PNG")
+            img_str = base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+            snippet = ""
+            for block in page.get_text("dict")["blocks"]:
+                if block["type"] == 0:
+                    for line in block["lines"]:
+                        for span in line["spans"]:
+                            if abs(span["bbox"][1] - y) < 50:  # cerca verticalmente
+                                snippet = span["text"]
+                                break
+                        if snippet:
+                            break
+                if snippet:
+                    break
+
+            image_results.append({
+                "image_base64": img_str,
+                "y": y,
+                "text_snippet": snippet.strip(),
+                "page": page_index + 1,
+                "index": len(image_results) + 1
+            })
+
+        all_results.append({
+            "page": page_index + 1,
+            "images": image_results,
+            "text_lines": [
+                {"text": span["text"], "y": span["bbox"][1]}
+                for block in page.get_text("dict")["blocks"]
+                if block["type"] == 0
+                for line in block["lines"]
+                for span in line["spans"]
+            ]
+        })
+
+    return all_results
+
 @app.route("/parse", methods=["POST"])
 def parse_pdf():
-    if 'file' not in request.files:
+    if "file" not in request.files:
         return jsonify({"error": "No file received (request.files is empty)"}), 400
 
     file = request.files["file"]
-    pdf_bytes = file.read()
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-
-    result = []
-
-    for page_number, page in enumerate(doc, start=1):
-        page_data = {
-            "page": page_number,
-            "text_lines": [],
-            "images": []
-        }
-
-        # 1. Extraer texto con coordenadas
-        blocks = page.get_text("dict")["blocks"]
-        for block in blocks:
-            if block["type"] == 0:  # texto
-                for line in block.get("lines", []):
-                    line_text = " ".join([span["text"] for span in line["spans"]]).strip()
-                    if line_text:
-                        page_data["text_lines"].append({
-                            "text": line_text,
-                            "y": line["bbox"][1]
-                        })
-
-        # 2. Extraer imágenes incrustadas y renderizadas
-        img_list = page.get_images(full=True)
-        for idx, img in enumerate(img_list):
-            xref = img[0]
-            try:
-                pix = fitz.Pixmap(doc, xref)
-                if pix.n < 5:
-                    img_bytes = pix.tobytes("png")
-                else:
-                    pix = fitz.Pixmap(fitz.csRGB, pix)
-                    img_bytes = pix.tobytes("png")
-
-                img_base64 = base64.b64encode(img_bytes).decode("utf-8")
-
-                # Obtener posición (si es posible)
-                image_info = page.get_image_info(xref)
-                y_pos = image_info[0].get("bbox", [0, 0, 0, 0])[1] if image_info else 0
-
-                # Buscar texto cercano
-                snippet = ""
-                min_dist = 9999
-                for t in page_data["text_lines"]:
-                    dist = abs(t["y"] - y_pos)
-                    if dist < min_dist:
-                        min_dist = dist
-                        snippet = t["text"]
-
-                page_data["images"].append({
-                    "index": idx + 1,
-                    "y": y_pos,
-                    "text_snippet": snippet,
-                    "image_base64": img_base64
-                })
-
-            except Exception:
-                continue
-
-        result.append(page_data)
-
-    return jsonify(result), 200
+    try:
+        results = extract_images_with_context(file.read())
+        return jsonify(results)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
