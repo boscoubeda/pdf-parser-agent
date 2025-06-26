@@ -25,10 +25,10 @@ def parse_pdf():
             "images": []
         }
 
-        # Extraer líneas de texto con coordenadas Y
+        # 1. Extraer texto con coordenadas
         blocks = page.get_text("dict")["blocks"]
         for block in blocks:
-            if block["type"] == 0:  # bloque de texto
+            if block["type"] == 0:  # texto
                 for line in block.get("lines", []):
                     line_text = " ".join([span["text"] for span in line["spans"]]).strip()
                     if line_text:
@@ -37,21 +37,25 @@ def parse_pdf():
                             "y": line["bbox"][1]
                         })
 
-        # Extraer imágenes visibles con coordenadas
-        img_blocks = [b for b in blocks if b["type"] == 1]
-        for idx, img_block in enumerate(img_blocks):
+        # 2. Extraer imágenes incrustadas y renderizadas
+        img_list = page.get_images(full=True)
+        for idx, img in enumerate(img_list):
+            xref = img[0]
             try:
-                xref = img_block["image"]
                 pix = fitz.Pixmap(doc, xref)
                 if pix.n < 5:
                     img_bytes = pix.tobytes("png")
                 else:
                     pix = fitz.Pixmap(fitz.csRGB, pix)
                     img_bytes = pix.tobytes("png")
-                img_base64 = base64.b64encode(img_bytes).decode("utf-8")
-                y_pos = img_block["bbox"][1]
 
-                # buscar texto cercano
+                img_base64 = base64.b64encode(img_bytes).decode("utf-8")
+
+                # Obtener posición (si es posible)
+                image_info = page.get_image_info(xref)
+                y_pos = image_info[0].get("bbox", [0, 0, 0, 0])[1] if image_info else 0
+
+                # Buscar texto cercano
                 snippet = ""
                 min_dist = 9999
                 for t in page_data["text_lines"]:
@@ -66,6 +70,7 @@ def parse_pdf():
                     "text_snippet": snippet,
                     "image_base64": img_base64
                 })
+
             except Exception:
                 continue
 
