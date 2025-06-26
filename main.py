@@ -1,65 +1,75 @@
 from flask import Flask, request, jsonify
-import fitz  # PyMuPDF
-import base64
-import io
 from flask_cors import CORS
+import fitz  # PyMuPDF
+import io
+import base64
 
 app = Flask(__name__)
 CORS(app)
 
-@app.route('/parse', methods=['POST'])
+@app.route("/parse", methods=["POST"])
 def parse_pdf():
     if 'file' not in request.files:
-        return jsonify({'error': 'No file received (request.files is empty)'}), 400
+        return jsonify({"error": "No file received (request.files is empty)"}), 400
 
-    file = request.files['file']
+    file = request.files["file"]
     pdf_bytes = file.read()
 
-    doc = fitz.open(stream=pdf_bytes, filetype='pdf')
-
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     result = []
 
-    for page_number in range(len(doc)):
-        page = doc.load_page(page_number)
-        blocks = page.get_text("dict")["blocks"]
-
+    for page_num, page in enumerate(doc, start=1):
+        # Extraer texto línea por línea con posición vertical Y
+        lines = page.get_text("dict")["blocks"]
         text_lines = []
-        for block in blocks:
-            if block["type"] == 0:  # text block
-                for line in block["lines"]:
-                    line_text = " ".join(span["text"] for span in line["spans"]).strip()
-                    if line_text:
-                        y_pos = line["bbox"][1]  # y0 of the line
-                        text_lines.append({"text": line_text, "y": y_pos})
+        for block in lines:
+            for line in block.get("lines", []):
+                line_text = " ".join([span["text"] for span in line["spans"]]).strip()
+                if line_text:
+                    text_lines.append({
+                        "text": line_text,
+                        "y": line["bbox"][1]  # posición vertical
+                    })
 
-        images_data = []
+        # Extraer imágenes
+        image_data = []
         for img_index, img in enumerate(page.get_images(full=True)):
             xref = img[0]
-            base_image = doc.extract_image(xref)
-            image_bytes = base_image["image"]
-            image_ext = base_image["ext"]
+            try:
+                pix = fitz.Pixmap(doc, xref)
+                if pix.n < 5:  # sin canal alfa
+                    pix_bytes = pix.tobytes("png")
+                else:
+                    pix = fitz.Pixmap(fitz.csRGB, pix)
+                    pix_bytes = pix.tobytes("png")
+                encoded = base64.b64encode(pix_bytes).decode("utf-8")
+                # buscar la posición aproximada de la imagen (si se puede)
+                img_info = page.get_image_info(xref)
+                y_position = img_info["bbox"][1] if "bbox" in img_info else 0
 
-            # Get image position
-            image_rects = page.get_image_rects(xref)
-            if image_rects:
-                y_pos = image_rects[0].y0  # vertical position
-            else:
-                y_pos = 0  # fallback
+                # buscar snippet de texto cercano
+                nearby_text = ""
+                for t in text_lines:
+                    if abs(t["y"] - y_position) < 50:
+                        nearby_text = t["text"]
+                        break
 
-            base64_img = base64.b64encode(image_bytes).decode("utf-8")
-            images_data.append({
-                "y": y_pos,
-                "image_base64": base64_img,
-                "ext": image_ext
-            })
+                image_data.append({
+                    "image_base64": encoded,
+                    "index": img_index + 1,
+                    "y": y_position,
+                    "text_snippet": nearby_text
+                })
+            except Exception as e:
+                continue  # si falla una imagen, seguimos con las otras
 
         result.append({
-            "page": page_number + 1,
+            "page": page_num,
             "text_lines": text_lines,
-            "images": images_data
+            "images": image_data
         })
 
-    return jsonify(result)
+    return jsonify(result), 200
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
