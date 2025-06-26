@@ -14,60 +14,62 @@ def parse_pdf():
 
     file = request.files["file"]
     pdf_bytes = file.read()
-
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
     result = []
 
-    for page_num, page in enumerate(doc, start=1):
-        # Extraer texto línea por línea con posición vertical Y
-        lines = page.get_text("dict")["blocks"]
-        text_lines = []
-        for block in lines:
-            for line in block.get("lines", []):
-                line_text = " ".join([span["text"] for span in line["spans"]]).strip()
-                if line_text:
-                    text_lines.append({
-                        "text": line_text,
-                        "y": line["bbox"][1]  # posición vertical
-                    })
+    for page_number, page in enumerate(doc, start=1):
+        page_data = {
+            "page": page_number,
+            "text_lines": [],
+            "images": []
+        }
 
-        # Extraer imágenes
-        image_data = []
-        for img_index, img in enumerate(page.get_images(full=True)):
-            xref = img[0]
+        # Extraer líneas de texto con coordenadas Y
+        blocks = page.get_text("dict")["blocks"]
+        for block in blocks:
+            if block["type"] == 0:  # bloque de texto
+                for line in block.get("lines", []):
+                    line_text = " ".join([span["text"] for span in line["spans"]]).strip()
+                    if line_text:
+                        page_data["text_lines"].append({
+                            "text": line_text,
+                            "y": line["bbox"][1]
+                        })
+
+        # Extraer imágenes visibles con coordenadas
+        img_blocks = [b for b in blocks if b["type"] == 1]
+        for idx, img_block in enumerate(img_blocks):
             try:
+                xref = img_block["image"]
                 pix = fitz.Pixmap(doc, xref)
-                if pix.n < 5:  # sin canal alfa
-                    pix_bytes = pix.tobytes("png")
+                if pix.n < 5:
+                    img_bytes = pix.tobytes("png")
                 else:
                     pix = fitz.Pixmap(fitz.csRGB, pix)
-                    pix_bytes = pix.tobytes("png")
-                encoded = base64.b64encode(pix_bytes).decode("utf-8")
-                # buscar la posición aproximada de la imagen (si se puede)
-                img_info = page.get_image_info(xref)
-                y_position = img_info["bbox"][1] if "bbox" in img_info else 0
+                    img_bytes = pix.tobytes("png")
+                img_base64 = base64.b64encode(img_bytes).decode("utf-8")
+                y_pos = img_block["bbox"][1]
 
-                # buscar snippet de texto cercano
-                nearby_text = ""
-                for t in text_lines:
-                    if abs(t["y"] - y_position) < 50:
-                        nearby_text = t["text"]
-                        break
+                # buscar texto cercano
+                snippet = ""
+                min_dist = 9999
+                for t in page_data["text_lines"]:
+                    dist = abs(t["y"] - y_pos)
+                    if dist < min_dist:
+                        min_dist = dist
+                        snippet = t["text"]
 
-                image_data.append({
-                    "image_base64": encoded,
-                    "index": img_index + 1,
-                    "y": y_position,
-                    "text_snippet": nearby_text
+                page_data["images"].append({
+                    "index": idx + 1,
+                    "y": y_pos,
+                    "text_snippet": snippet,
+                    "image_base64": img_base64
                 })
-            except Exception as e:
-                continue  # si falla una imagen, seguimos con las otras
+            except Exception:
+                continue
 
-        result.append({
-            "page": page_num,
-            "text_lines": text_lines,
-            "images": image_data
-        })
+        result.append(page_data)
 
     return jsonify(result), 200
 
